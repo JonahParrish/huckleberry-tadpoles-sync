@@ -13,6 +13,9 @@ describe("notify", () => {
 
 		const [url, init] = fetchMock.mock.calls[0];
 		expect(url).toBe("https://ntfy.sh");
+		// Cached messages remain available for background delivery/reconnection.
+		expect(new Headers(init.headers).has("Cache")).toBe(false);
+		expect(new Headers(init.headers).has("X-Cache")).toBe(false);
 		const body = JSON.parse(init.body as string);
 		expect(body).toMatchObject({ topic: "secret-topic", title: "Daycare sync 2026-06-12 FAILED", priority: 5 });
 		expect(body.message.length).toBeLessThan(4000);

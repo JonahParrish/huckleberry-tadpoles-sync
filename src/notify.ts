@@ -39,7 +39,9 @@ export async function notify(env: Env, title: string, message: string, failure =
 	if (server.protocol !== "https:" || server.username || server.password) {
 		throw new Error("NTFY_SERVER must be an HTTPS URL without embedded credentials");
 	}
-	const headers = new Headers({ "Content-Type": "application/json", "Cache": "no" });
+	// Leave ntfy caching enabled for background delivery and reconnecting subscribers.
+	// Routine details are excluded by default at the caller.
+	const headers = new Headers({ "Content-Type": "application/json" });
 	if (env.NTFY_TOKEN) headers.set("Authorization", `Bearer ${env.NTFY_TOKEN}`);
 	const res = await fetch(env.NTFY_SERVER, {
 		method: "POST",

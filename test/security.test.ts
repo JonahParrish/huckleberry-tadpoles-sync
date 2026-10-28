@@ -60,14 +60,15 @@ describe("manual endpoint security", () => {
 });
 
 describe("notification and error privacy", () => {
-	it("uses TLS, authentication, no cache and no redirects for notification publishing", async () => {
+	it("uses TLS, authentication and no redirects while preserving notification caching", async () => {
 		const fetchMock = vi.fn().mockResolvedValue(new Response("ok"));
 		vi.stubGlobal("fetch", fetchMock);
 		await notify({ ...env, NTFY_TOKEN: "private-token" }, "title", "message");
 		const init = fetchMock.mock.calls[0][1];
 		expect(init.redirect).toBe("manual");
 		expect(init.headers.get("Authorization")).toBe("Bearer private-token");
-		expect(init.headers.get("Cache")).toBe("no");
+		expect(init.headers.has("Cache")).toBe(false);
+		expect(init.headers.has("X-Cache")).toBe(false);
 		await expect(notify({ ...env, NTFY_SERVER: "http://example.com" } as any, "t", "m")).rejects.toThrow("HTTPS");
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
