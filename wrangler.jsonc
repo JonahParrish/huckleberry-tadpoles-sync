@@ -3,6 +3,7 @@
   "name": "huckleberry-tadpoles-sync",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-16",
+  "preview_urls": false,
   "observability": { "enabled": true },
   "triggers": {
     // 5pm Eastern, after pickup. Cron is UTC, so fire at both 21:00 (EDT) and 22:00 (EST);
@@ -16,5 +17,6 @@
   }
   // Secrets (wrangler secret put / .dev.vars):
   //   TADPOLES_EMAIL, TADPOLES_PASSWORD, HUCKLEBERRY_EMAIL, HUCKLEBERRY_PASSWORD, SYNC_TOKEN,
-  //   NTFY_TOPIC (long random name; anyone who knows it can read the notifications)
+  //   NTFY_TOPIC, optional NTFY_TOKEN (use a topic with anonymous access denied)
+  // Optional vars: MANUAL_SYNC_ENABLED="true", NOTIFICATION_DETAILS="true". Both default off.
 }

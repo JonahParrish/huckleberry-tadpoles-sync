@@ -53,9 +53,11 @@ export class TadpolesClient {
 		});
 		const body = (await res.json()) as { status: string; payload?: { daily_reports?: TadpolesDailyReport[] } };
 		if (body.status !== "ok" || !body.payload?.daily_reports) {
-			throw new Error(`Tadpoles daily report query returned unexpected body: ${JSON.stringify(body).slice(0, 300)}`);
+			throw new Error("Tadpoles daily report query returned an unexpected body");
 		}
-		return body.payload.daily_reports.filter((r) => r.date === date);
+		const reports = body.payload.daily_reports.filter((r) => r.date === date);
+		if (reports.length > 1) throw new Error("Multiple Tadpoles reports found; refusing to choose a child implicitly");
+		return reports;
 	}
 
 	private post(path: string, form: Record<string, string>): Promise<Response> {
@@ -74,7 +76,7 @@ export class TadpolesClient {
 			this.cookies.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
 		}
 		if (!res.ok) {
-			throw new Error(`Tadpoles ${init.method} ${url.pathname} failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+			throw new Error(`Tadpoles ${init.method} ${url.pathname} failed: ${res.status}`);
 		}
 		return res;
 	}

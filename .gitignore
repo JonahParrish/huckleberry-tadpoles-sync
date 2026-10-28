@@ -1,6 +1,10 @@
 node_modules/
 .wrangler/
-.dev.vars
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
 worker-configuration.d.ts
 # Raw captures from Tadpoles contain personal info; scrubbed copies live in test/fixtures
 /fixtures/
+SECURITY_REVIEW.md

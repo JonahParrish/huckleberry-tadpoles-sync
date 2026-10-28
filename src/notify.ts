@@ -35,16 +35,23 @@ export function summarize(result: SyncResult, timeZone: string): { subject: stri
 
 /** Push notification via ntfy (JSON publish, so non-ASCII titles/messages are safe). */
 export async function notify(env: Env, title: string, message: string, failure = false): Promise<void> {
+	const server = new URL(env.NTFY_SERVER);
+	if (server.protocol !== "https:" || server.username || server.password) {
+		throw new Error("NTFY_SERVER must be an HTTPS URL without embedded credentials");
+	}
+	const headers = new Headers({ "Content-Type": "application/json", "Cache": "no" });
+	if (env.NTFY_TOKEN) headers.set("Authorization", `Bearer ${env.NTFY_TOKEN}`);
 	const res = await fetch(env.NTFY_SERVER, {
 		method: "POST",
-		headers: { "Content-Type": "application/json" },
+		redirect: "error",
+		headers,
 		body: JSON.stringify({
 			topic: env.NTFY_TOPIC,
 			title,
-			message: message.length > 3500 ? `${message.slice(0, 3500)}\n…(truncated; see wrangler tail)` : message,
+			message: message.length > 3500 ? `${message.slice(0, 3500)}\n…(truncated)` : message,
 			priority: failure ? 5 : 3,
 			tags: [failure ? "warning" : "baby_bottle"],
 		}),
 	});
-	if (!res.ok) throw new Error(`ntfy publish failed: ${res.status} ${await res.text()}`);
+	if (!res.ok) throw new Error(`ntfy publish failed: ${res.status}`);
 }

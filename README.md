@@ -2,7 +2,7 @@
 
 A Cloudflare Worker that copies your child's daycare day from **Tadpoles** into **Huckleberry** every weekday afternoon: diapers, bottles and naps. No more re-entering the daily report by hand, and no more gaps in Huckleberry's sleep predictions on the days you forget.
 
-When it finishes, it sends a push notification to your phone (via [ntfy](https://ntfy.sh)) summarizing what it added, or telling you what went wrong.
+When it finishes, it sends a push notification to your phone (via [ntfy](https://ntfy.sh)) reporting success or failure. Detailed notifications are an explicit opt-in.
 
 > [!WARNING]
 > **Unofficial.** Neither Tadpoles nor Huckleberry offers a public API. This project uses the same private APIs their own apps use, worked out by the community. It is not affiliated with or endorsed by either company, it may break without warning when either app changes, and using it may be against their terms of service. Use it at your own risk, with your own accounts.
@@ -39,12 +39,12 @@ When it finishes, it sends a push notification to your phone (via [ntfy](https:/
 **Skipped on purpose:**
 - **Entries a parent added at drop-off** (e.g. "last diaper at home", "woke up at 6:10"). They describe time at home, which you've presumably already logged in Huckleberry.
 - **Teacher notes and photos.**
-- **Anything it doesn't understand yet**, such as solid meals or potty trips. These are listed as "not synced" in the notification, so you can add them by hand.
+- **Anything it doesn't understand yet**, such as solid meals or potty trips. These are listed as "not synced" in the authenticated dry-run response (and detailed notifications if enabled), so you can add them by hand.
 
 ### No duplicates
 
 - **Running a day twice is safe.** Each Huckleberry entry gets an ID derived from the Tadpoles entry it came from. On a second run, Huckleberry reports that the entry already exists, and it's skipped.
-- **Entries you logged by hand are left alone.** If Huckleberry already has a diaper or bottle within 15 minutes of the daycare's time, or a sleep that overlaps the nap, the daycare entry is skipped and the notification says so.
+- **Entries you logged by hand are left alone.** If Huckleberry already has a diaper or bottle within 15 minutes of the daycare's time, or a sleep that overlaps the nap, the daycare entry is skipped and the dry-run response says so.
 - **The home screen stays accurate.** Huckleberry's "last diaper / last bottle / last sleep" summary is only updated when the daycare entry is newer than what's there.
 
 ## Requirements
@@ -107,7 +107,9 @@ When 5pm local is after midnight UTC, the UTC day is one later. That's why those
    ```
 2. **Subscribe on your phone.** In the ntfy app, tap **+** and subscribe to that exact topic.
 
-To use your own ntfy server, set `NTFY_SERVER` in `wrangler.jsonc`.
+To use your own ntfy server, set `NTFY_SERVER` to an HTTPS URL in `wrangler.jsonc`.
+
+For stronger protection, use a topic with **anonymous read and write denied** and set the optional `NTFY_TOKEN` secret to an authorized publishing token. Adding a token alone does not make a public topic private; configure topic access on the server and authenticate the phone subscription too. See [ntfy access control](https://docs.ntfy.sh/config/#access-control). The relay operator can still read message contents. Notifications request no server-side caching, so offline delivery/replay may be unavailable; this is not end-to-end encryption.
 
 ### 4. Add your credentials locally and do a dry run
 
@@ -115,7 +117,7 @@ To use your own ntfy server, set `NTFY_SERVER` in `wrangler.jsonc`.
 cp .dev.vars.example .dev.vars
 ```
 
-Fill in `.dev.vars`. It's in `.gitignore`, so it never gets committed:
+Fill in `.dev.vars`. It's in `.gitignore`; do not force-add it or paste its contents into issues:
 
 | Name | What it is |
 |---|---|
@@ -123,6 +125,9 @@ Fill in `.dev.vars`. It's in `.gitignore`, so it never gets committed:
 | `HUCKLEBERRY_EMAIL`, `HUCKLEBERRY_PASSWORD` | Your Huckleberry login |
 | `SYNC_TOKEN` | A random password protecting the manual `/sync` URL. Make one with `openssl rand -hex 32`. |
 | `NTFY_TOPIC` | The topic from step 3 |
+| `NTFY_TOKEN` | Optional publishing token for an access-controlled topic |
+| `MANUAL_SYNC_ENABLED` | `true` enables `/sync`; the example enables it locally |
+| `NOTIFICATION_DETAILS` | Defaults to `false`; `true` includes event times and feeding/diaper details in push notifications |
 
 Start the Worker locally:
 
@@ -137,7 +142,7 @@ TOKEN=$(grep '^SYNC_TOKEN=' .dev.vars | cut -d= -f2- | tr -d '"')
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:8787/sync?date=2026-06-12"
 ```
 
-You get back JSON listing what would be added, what's already in Huckleberry, and what's skipped. If it looks right, write it for real by adding `&write=1`. Then check that day in the Huckleberry app.
+You get back JSON listing what would be added, what's already in Huckleberry, and what's skipped. If it looks right, write it for real by using `curl -X POST` and adding `&write=1`. Then check that day in the Huckleberry app.
 
 ### 5. Deploy
 
@@ -150,6 +155,8 @@ npx wrangler secret put HUCKLEBERRY_EMAIL
 npx wrangler secret put HUCKLEBERRY_PASSWORD
 npx wrangler secret put SYNC_TOKEN
 npx wrangler secret put NTFY_TOPIC
+# If using an authenticated ntfy topic:
+npx wrangler secret put NTFY_TOKEN
 ```
 
 Then deploy:
@@ -164,11 +171,13 @@ That's it. The sync now runs every weekday at your chosen hour, and your phone g
 
 ### Notifications
 
-- **After each run:** a summary like *"Daycare sync 2026-06-12: 6 diapers, 4 bottles, 3 naps"*. Open it to see each entry it added, anything skipped because you'd already logged it, and anything it couldn't translate.
-- **On failure:** a high-priority alert with the error.
-- **Report not published yet:** the summary warns that the report may be incomplete.
+- **After each run:** a generic completion notice. A completion can mean no report was found; use an authenticated dry run to check details.
+- **On failure:** a high-priority generic alert. Raw exceptions, upstream response bodies and account identifiers are excluded.
+- **Detailed notifications:** set `NOTIFICATION_DETAILS` to `"true"` in Wrangler vars to include counts, routine details, skipped entries and publication warnings. Use a private topic before opting in.
 
 ### Running a day by hand
+
+Manual access is **disabled by default**. To enable it in production, add `"MANUAL_SYNC_ENABLED": "true"` to Wrangler `vars` and redeploy. Set `SYNC_TOKEN` to a random value of at least 32 characters (`openssl rand -hex 32` generates 64). Disable manual access again when you no longer need it.
 
 Use the deployed Worker's URL (shown by `npm run deploy`):
 
@@ -176,7 +185,7 @@ Use the deployed Worker's URL (shown by `npm run deploy`):
 # dry run
 curl -H "Authorization: Bearer $TOKEN" "https://huckleberry-tadpoles-sync.<your-subdomain>.workers.dev/sync?date=2026-06-12"
 # write
-curl -H "Authorization: Bearer $TOKEN" "https://huckleberry-tadpoles-sync.<your-subdomain>.workers.dev/sync?date=2026-06-12&write=1"
+curl -X POST -H "Authorization: Bearer $TOKEN" "https://huckleberry-tadpoles-sync.<your-subdomain>.workers.dev/sync?date=2026-06-12&write=1"
 ```
 
 Use this to backfill a missed day, or to finish a day whose report was published after the scheduled run. It's always safe to repeat; already-synced entries are skipped. Manual runs don't send notifications.
@@ -192,22 +201,30 @@ Or open the Worker's **Observability** tab in the Cloudflare dashboard.
 ## Limitations
 
 - **One-way, add-only.** If a teacher edits or deletes an entry after it was synced, Huckleberry isn't updated. Fix it in the app.
-- **Solids and potty aren't synced yet.** They're listed in the notification. Pull requests are welcome; a sample of the Tadpoles data for a day with solids is the main thing needed.
+- **Solids and potty aren't synced yet.** They're listed in the dry-run response. Pull requests are welcome; a sample of the Tadpoles data for a day with solids is the main thing needed.
 - **Free plan limit.** Each run on the free Workers plan can make 50 outside requests. A sync uses about 18 plus 1 per new entry, so up to roughly 30 new entries a day, far more than a typical daycare day.
 - **Fragile by nature.** If Tadpoles or Huckleberry change their private APIs, the sync fails and you get an alert. Check for updates here, or open an issue.
 
 ## Privacy and security
 
-- **Credentials** live only in Cloudflare Worker secrets, and in `.dev.vars` on your machine, which is gitignored.
-- **Notifications pass through ntfy.sh**, a public relay, unless you run your own server. They contain diaper, feeding and nap times, not names. A failure alert may include a short excerpt of an error response from either service.
-- **The `/sync` URL** is protected by `SYNC_TOKEN`. Without the token, it returns 401.
-- **`src/huckleberry.ts` contains a Firebase API key.** It's Huckleberry's public app key, built into their app, and it's useless without an account password. GitHub's secret scanning may flag it anyway; it's a false positive.
+- **Account scope:** the Worker holds account passwords, which grant broader access than the few fields being synced. Restrict access to Cloudflare, your computer, and deployment credentials. Use unique passwords and account security controls where supported.
+- **Credentials:** use Cloudflare Worker secrets in production. Local `.dev.vars*` and `.env*` files are ignored (except example files). Ignore rules do not protect previously committed secrets or forced additions.
+- **Data minimization:** teacher notes and photos are not written to Huckleberry. Scheduled runs log only generic completion/failure messages, and failures never include upstream response bodies. Cloudflare invocation metadata may still include manual request dates and URLs. Never put passwords, tokens or topic names in request URLs.
+- **Notifications:** routine details are excluded by default. Public ntfy topics allow anyone with the topic name to read messages or forge alerts. Use a private topic with anonymous access denied for stronger protection. HTTPS protects transport; the relay and phone push infrastructure remain trusted parties.
+- **Manual access:** disabled unless explicitly enabled, protected by a Bearer token of at least 32 characters, and uncached. GET previews; POST with `write=1` writes. A stolen token permits reading historical sync results and triggering writes. There is no built-in rate limit; disable manual access when unused or protect it with Cloudflare Access/rate limits.
+- **Child selection:** Huckleberry must have exactly one child. Multiple matching Tadpoles reports cause the sync to stop rather than silently choosing one. This does not verify that the sole child on each account is the same person; check your first dry run.
+- **Firebase app key:** the key in `src/huckleberry.ts` is public client configuration, not an account credential. Data access must be enforced by the provider's authentication and Firestore rules, which this repository cannot audit.
+- **Test fixture:** names and source IDs are scrubbed, but the fixture retains the original date, routine timestamps and amounts. Treat it as personal routine data if sharing this repository. Editing the current fixture cannot remove copies already in Git history.
+
+See [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for findings, changes and remaining deployment checks.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| `401 Unauthorized` from `/sync` | The `Authorization: Bearer` header is missing or doesn't match `SYNC_TOKEN`. In a new terminal, `$TOKEN` may be empty. |
+| `404 Not found` from `/sync` | Set `MANUAL_SYNC_ENABLED=true` in the relevant local or production environment if manual access is needed. |
+| `405` when writing | Use POST with `write=1`. |
+| `401 Unauthorized` from `/sync` | The `Authorization: Bearer` header is missing or doesn't match `SYNC_TOKEN`, or the configured token has fewer than 32 characters. In a new terminal, `$TOKEN` may be empty. |
 | `Tadpoles POST /auth/login failed` | Wrong Tadpoles email or password, or the account uses Google sign-in. |
 | `Huckleberry login failed` | Wrong Huckleberry email or password, or the account has no password login. |
 | `Expected exactly one child` | The Huckleberry account has several children (not supported yet). |
@@ -232,7 +249,7 @@ npm run dev         # local Worker; /sync works, plus /__scheduled?cron=... to f
 | `src/huckleberry.ts` | Huckleberry client (Firebase Auth + Firestore REST) |
 | `src/notify.ts` | ntfy notifications and summary text |
 | `src/time.ts` | Time zone helpers |
-| `test/fixtures/daily-report.json` | A real Tadpoles daily report, stripped to the fields the code uses |
+| `test/fixtures/daily-report.json` | A Tadpoles report with names/IDs scrubbed; original routine timestamps remain |
 
 Changing what gets synced usually means editing `src/mapping.ts` and adding a case to `test/mapping.test.ts`.
 

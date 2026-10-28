@@ -31,12 +31,14 @@ export class HuckleberryClient {
 	async login(): Promise<void> {
 		const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`, {
 			method: "POST",
+			redirect: "error",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ email: this.email, password: this.password, returnSecureToken: true }),
 		});
-		if (!res.ok) throw new Error(`Huckleberry login failed: ${res.status} ${await res.text()}`);
+		if (!res.ok) throw new Error(`Huckleberry login failed: ${res.status}`);
 		const data = (await res.json()) as { idToken: string; localId: string };
 		this.idToken = data.idToken;
+		if (typeof data.localId !== "string" || !/^[A-Za-z0-9_-]+$/.test(data.localId)) throw new Error("Invalid Huckleberry user ID");
 		this.uid = data.localId;
 	}
 
@@ -46,6 +48,7 @@ export class HuckleberryClient {
 		if (children.length !== 1) {
 			throw new Error(`Expected exactly one child on the Huckleberry account, found ${children.length}`);
 		}
+		if (typeof children[0]?.cid !== "string" || !/^[A-Za-z0-9_-]+$/.test(children[0].cid)) throw new Error("Invalid Huckleberry child ID");
 		return children[0].cid;
 	}
 
@@ -130,10 +133,11 @@ export class HuckleberryClient {
 		if (!this.idToken) throw new Error("HuckleberryClient.login() must be called first");
 		const res = await fetch(url, {
 			...init,
+			redirect: "error",
 			headers: { Authorization: `Bearer ${this.idToken}`, "Content-Type": "application/json" },
 		});
 		if (!res.ok && !allowStatuses.includes(res.status)) {
-			throw new Error(`Huckleberry ${init.method} ${new URL(url).pathname} failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
+			throw new Error(`Huckleberry ${init.method} request failed: ${res.status}`);
 		}
 		return res;
 	}

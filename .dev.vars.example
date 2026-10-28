@@ -4,3 +4,10 @@ HUCKLEBERRY_EMAIL=
 HUCKLEBERRY_PASSWORD=
 SYNC_TOKEN=
 NTFY_TOPIC=
+
+# Optional: publishing token for an access-controlled topic
+NTFY_TOKEN=
+# Enable local manual dry runs; set separately in wrangler vars for production if needed
+MANUAL_SYNC_ENABLED=true
+# Keep routine details out of push notifications unless explicitly enabled
+NOTIFICATION_DETAILS=false
