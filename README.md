@@ -37,6 +37,7 @@ When it finishes, it sends a push notification to your phone (via [ntfy](https:/
 | Nap with start and end | Sleep |
 
 **Skipped on purpose:**
+
 - **Entries a parent added at drop-off** (e.g. "last diaper at home", "woke up at 6:10"). They describe time at home, which you've presumably already logged in Huckleberry.
 - **Teacher notes and photos.**
 - **Anything it doesn't understand yet**, such as solid meals or potty trips. These are listed as "not synced" in the authenticated dry-run response (and detailed notifications if enabled), so you can add them by hand.
@@ -109,7 +110,7 @@ When 5pm local is after midnight UTC, the UTC day is one later. That's why those
 
 To use your own ntfy server, set `NTFY_SERVER` to an HTTPS URL in `wrangler.jsonc`.
 
-For stronger protection, use a topic with **anonymous read and write denied** and set the optional `NTFY_TOKEN` secret to an authorized publishing token. Adding a token alone does not make a public topic private; configure topic access on the server and authenticate the phone subscription too. See [ntfy access control](https://docs.ntfy.sh/config/#access-control). The relay operator can still read message contents. Notifications request no server-side caching, so offline delivery/replay may be unavailable; this is not end-to-end encryption.
+For stronger protection, use a topic with **anonymous read and write denied** and set the optional `NTFY_TOKEN` secret to an authorized publishing token. Adding a token alone does not make a public topic private; configure topic access on the server and authenticate the phone subscription too. See [ntfy access control](https://docs.ntfy.sh/config/#access-control). The relay operator can still read message contents. Notifications use the server's normal message cache for background delivery and reconnecting subscribers; ntfy's default cache duration is 12 hours, but server configuration may differ. This is not end-to-end encryption. Keep detailed notifications off if you do not want routine data cached by the relay.
 
 ### 4. Add your credentials locally and do a dry run
 
@@ -167,6 +168,42 @@ npm run deploy
 
 That's it. The sync now runs every weekday at your chosen hour, and your phone gets a notification after each run.
 
+## Updating an existing deployment
+
+From the repository directory, install the dependencies from the updated lockfile, check the changes, and redeploy:
+
+```sh
+npm ci
+npm test
+npm run typecheck
+npm run deploy
+```
+
+If Wrangler asks you to authenticate, run `npx wrangler login` and retry. Existing Cloudflare secrets remain in place; you do not need to enter the Tadpoles or Huckleberry credentials again. Settings in `.dev.vars` apply to local development, so configure production options in `wrangler.jsonc` and production credentials with `wrangler secret put`.
+
+### Changes when upgrading to the security-hardened version
+
+- **Scheduled sync continues on the configured cron schedule.**
+- **Notifications now contain only generic success/failure status by default.** To restore routine details, set `"NOTIFICATION_DETAILS": "true"` in Wrangler `vars`. Configure a private notification topic first (see below).
+- **Manual `/sync` access is disabled by default.** If you need it, add `"MANUAL_SYNC_ENABLED": "true"` to Wrangler `vars` before deploying. This option is independent of the cron schedule.
+- **Manual authentication requires a Bearer token of at least 32 characters.** If your existing `SYNC_TOKEN` is shorter, generate a replacement with `openssl rand -hex 32`, then store it with `npx wrangler secret put SYNC_TOKEN`. Update your local token and any scripts that use it.
+- **Manual writes require POST.** Update existing scripts to use `curl -X POST` with `&write=1`; GET remains a dry run. See [Running a day by hand](#running-a-day-by-hand) for complete commands.
+- **Preview URLs are disabled, and scheduled logs no longer contain event data or raw error details.** The main Worker URL remains available, subject to the manual-access setting above.
+
+To switch an existing notification setup to a private topic:
+
+1. Configure the topic on your ntfy server to deny anonymous **reads and writes**, and authenticate the phone subscription. Follow the [ntfy access-control instructions](https://docs.ntfy.sh/config/#access-control).
+2. Create an authorized publishing token and store it in Cloudflare:
+   ```sh
+   npx wrangler secret put NTFY_TOKEN
+   ```
+3. If the topic changed, update `NTFY_TOPIC` with `npx wrangler secret put NTFY_TOPIC`. If the server changed, update `NTFY_SERVER` in Wrangler `vars` to its HTTPS URL.
+4. Run `npm run deploy` after updating configuration, and check notification delivery after the next scheduled run. Manual runs do not send notifications.
+
+Adding `NTFY_TOKEN` alone does not make a public topic private. Leave `NOTIFICATION_DETAILS` unset or `"false"` to keep routine information out of notifications.
+
+After deployment, confirm the next scheduled run in `npx wrangler tail` or the Cloudflare dashboard. If manual access is enabled, you can also run an authenticated dry run to inspect the planned entries. To test the cron handler and notifications before the next normal run, see [Testing the deployed cron job today](#testing-the-deployed-cron-job-today). Earlier logs and notifications are not removed by redeploying; review their retention separately.
+
 ## Using it
 
 ### Notifications
@@ -179,7 +216,18 @@ That's it. The sync now runs every weekday at your chosen hour, and your phone g
 
 Manual access is **disabled by default**. To enable it in production, add `"MANUAL_SYNC_ENABLED": "true"` to Wrangler `vars` and redeploy. Set `SYNC_TOKEN` to a random value of at least 32 characters (`openssl rand -hex 32` generates 64). Disable manual access again when you no longer need it.
 
-Use the deployed Worker's URL (shown by `npm run deploy`):
+In the terminal where you will run curl, set `TOKEN` to the exact value stored in the deployed Worker's `SYNC_TOKEN` secret. This variable is separate from the Worker secret and is not automatically populated by deploying. The following prompt keeps the value out of terminal output and shell history (bash/zsh):
+
+```sh
+printf 'Deployed SYNC_TOKEN: '
+read -r -s TOKEN
+printf '\n'
+printf 'Token length: %s characters\n' "${#TOKEN}"
+```
+
+Paste only the token at the prompt, without quotes or the `Bearer ` prefix. The length must be at least 32 characters. A value from `.dev.vars` works against production only if you stored that same value as the production secret. If you no longer know the deployed value, generate a new token with `openssl rand -hex 32`, store it using `npx wrangler secret put SYNC_TOKEN`, and use that same value at the prompt.
+
+Use the deployed Worker's URL (shown by `npm run deploy`). Requests to this `workers.dev` URL execute the deployed Worker in Cloudflare with production secrets; curl runs on your computer only to send the request. Requests to `http://localhost:8787` execute your local development Worker instead:
 
 ```sh
 # dry run
@@ -189,6 +237,33 @@ curl -X POST -H "Authorization: Bearer $TOKEN" "https://huckleberry-tadpoles-syn
 ```
 
 Use this to backfill a missed day, or to finish a day whose report was published after the scheduled run. It's always safe to repeat; already-synced entries are skipped. Manual runs don't send notifications.
+
+### Testing the deployed cron job today
+
+A successful manual request to the deployed URL verifies the production sync, but it does **not** exercise the `scheduled()` handler, the local-hour guard, or notifications. To test those after the usual 5pm run, temporarily schedule an additional real Cron Trigger. Cloudflare documents local cron-testing tools, but no production “Run now” command; `/__scheduled` is a development route, not a production endpoint.
+
+1. Choose a test time at least **20 minutes in the future**. Cron changes can take [up to 15 minutes to propagate](https://developers.cloudflare.com/workers/configuration/cron-triggers/).
+2. Add a temporary expression to `triggers.crons` in `wrangler.jsonc`, keeping the two normal schedules. Cron expressions use **UTC**, including any date/day rollover.
+3. Set `vars.SYNC_HOUR` to the test time's **local hour in `TIMEZONE`**. This is required: the handler skips any invocation outside that hour, regardless of the cron expression.
+4. Run `npm run deploy`, then watch `npx wrangler tail` or the Worker's **Observability** tab in the Cloudflare dashboard around the scheduled time. Look for `Scheduled sync completed` and confirm the push notification arrives. Also check for a subsequent failure: the completion log precedes notification publishing.
+5. **After the test, remove the temporary cron, restore `SYNC_HOUR` to your usual hour (`"17"` by default), and run `npm run deploy` again.** A cron expression repeats until removed; it is not a one-shot job.
+
+For example, **7:30pm US Eastern during daylight saving time (UTC−4)** is 23:30 UTC. If that time is still at least 20 minutes ahead, the temporary configuration would be:
+
+```jsonc
+"triggers": {
+  "crons": ["0 21 * * 1-5", "0 22 * * 1-5", "30 23 * * *"]
+},
+"vars": {
+  // Keep the other existing vars.
+  "TIMEZONE": "America/New_York",
+  "SYNC_HOUR": "19"
+}
+```
+
+Adjust the example for the actual date, time zone and UTC offset; in Eastern standard time, 7:30pm is 00:30 UTC the next day. Keep schedule changes in `wrangler.jsonc` so subsequent deployments use the intended configuration.
+
+This test performs a **real write sync for the local date at the scheduled time** and sends a notification. Entries already synced should be skipped. It does not depend on `MANUAL_SYNC_ENABLED`, so you can disable manual HTTP access after testing without affecting cron runs.
 
 ### Logs
 
@@ -209,7 +284,7 @@ Or open the Worker's **Observability** tab in the Cloudflare dashboard.
 
 - **Account scope:** the Worker holds account passwords, which grant broader access than the few fields being synced. Restrict access to Cloudflare, your computer, and deployment credentials. Use unique passwords and account security controls where supported.
 - **Credentials:** use Cloudflare Worker secrets in production. Local `.dev.vars*` and `.env*` files are ignored (except example files). Ignore rules do not protect previously committed secrets or forced additions.
-- **Data minimization:** teacher notes and photos are not written to Huckleberry. Scheduled runs log only generic completion/failure messages, and failures never include upstream response bodies. Cloudflare invocation metadata may still include manual request dates and URLs. Never put passwords, tokens or topic names in request URLs.
+- **Data minimization:** teacher notes and photos are not written to Huckleberry. Scheduled runs log completion/failure messages with safe failure stages and HTTP statuses, and failures never include upstream response bodies. Cloudflare invocation metadata may still include manual request dates and URLs. Never put passwords, tokens or topic names in request URLs.
 - **Notifications:** routine details are excluded by default. Public ntfy topics allow anyone with the topic name to read messages or forge alerts. Use a private topic with anonymous access denied for stronger protection. HTTPS protects transport; the relay and phone push infrastructure remain trusted parties.
 - **Manual access:** disabled unless explicitly enabled, protected by a Bearer token of at least 32 characters, and uncached. GET previews; POST with `write=1` writes. A stolen token permits reading historical sync results and triggering writes. There is no built-in rate limit; disable manual access when unused or protect it with Cloudflare Access/rate limits.
 - **Child selection:** Huckleberry must have exactly one child. Multiple matching Tadpoles reports cause the sync to stop rather than silently choosing one. This does not verify that the sole child on each account is the same person; check your first dry run.
@@ -220,17 +295,105 @@ See [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for findings, changes and remaining
 
 ## Troubleshooting
 
-| Symptom | Likely cause |
+### 1. Resolve manual authorization errors
+
+A `401 Unauthorized` from `/sync` happens before either app is contacted. Check these separately:
+
+- **Cloudflare secret:** the deployed Worker needs a `SYNC_TOKEN` of at least 32 characters. Set or replace it with `npx wrangler secret put SYNC_TOKEN`, entering the value at the prompt. A local `.dev.vars` value is not uploaded automatically.
+- **Terminal variable:** `$TOKEN` must contain that same value in the terminal running curl. Deploying or setting a Cloudflare secret does not populate it. Use the hidden-input prompt in [Running a day by hand](#running-a-day-by-hand); `${#TOKEN}` shows the length without printing the token.
+- **Header:** use `Authorization: Bearer $TOKEN`. Enter the token without quotes or the `Bearer ` prefix when prompted. The header itself needs exactly one `Bearer ` prefix.
+
+If you no longer know the deployed token, generate a replacement with `openssl rand -hex 32`, store it with `npx wrangler secret put SYNC_TOKEN`, and use the same value for your terminal variable and any scripts. Retry a dry run. Updating the deployed secret resolved the authorization error during deployment testing; changing the local variable alone cannot update Cloudflare's secret.
+
+A `404 Not found` instead usually means manual access is disabled: enable `"MANUAL_SYNC_ENABLED": "true"` in production Wrangler `vars` and redeploy if you need it. A `405` on `write=1` means the write needs POST.
+
+### 2. Confirm which diagnostic revision is deployed
+
+Use the exact Worker URL printed by the latest `npm run deploy`, and add `-i` to the authenticated **dry-run** request:
+
+```sh
+curl -i -H "Authorization: Bearer $TOKEN" \
+  "https://huckleberry-tadpoles-sync.<your-subdomain>.workers.dev/sync?date=2026-06-12"
+```
+
+This revision returns:
+
+```text
+X-Sync-Build: login-diagnostics-v3
+```
+
+Header names may appear lowercase. This value identifies the diagnostic revision, not a unique deployment ID. If it is absent or different, check that you deployed from the updated checkout and are calling the correct Worker's main URL. A successful JSON response with this header confirms that the deployed sync works; review the result before switching to POST with `write=1`.
+
+When reporting a failure, share only the `X-Sync-Build` header and the error text. Do not share successful response data unless scrubbed, and avoid `curl -v`, which prints the Authorization header.
+
+### 3. Diagnose failures after authorization
+
+An authenticated manual failure returns HTTP 502 with a safe stage and, when available, the upstream HTTP status:
+
+```text
+Sync failed: tadpoles-login (upstream HTTP 403)
+```
+
+That example means the manual token was accepted and the failure occurred while signing in to Tadpoles. It does **not** prove the password is wrong. Responses and scheduled logs omit raw upstream bodies, account identifiers and exception messages.
+
+Older revisions returned only `Sync failed; check account access and configuration`, or a broad `huckleberry-login (unexpected error; possible network failure or unsupported API response)`. Update and redeploy to get the more specific diagnostics below.
+
+**Redirect compatibility fix:** the initial security changes used `redirect: "error"` for Huckleberry login, Firestore requests and ntfy publishing. [Cloudflare Workers rejects that mode](https://developers.cloudflare.com/workers/runtime-apis/request/) before sending any request. The corrected implementation uses `redirect: "manual"` and rejects returned redirects through HTTP status checks. This retains redirect protection without the runtime error. If an old error persists after updating, verify the response header in step 2 before changing credentials.
+
+Huckleberry login now distinguishes these failures:
+
+| Error detail | Meaning / next check |
 |---|---|
-| `404 Not found` from `/sync` | Set `MANUAL_SYNC_ENABLED=true` in the relevant local or production environment if manual access is needed. |
-| `405` when writing | Use POST with `write=1`. |
-| `401 Unauthorized` from `/sync` | The `Authorization: Bearer` header is missing or doesn't match `SYNC_TOKEN`, or the configured token has fewer than 32 characters. In a new terminal, `$TOKEN` may be empty. |
-| `Tadpoles POST /auth/login failed` | Wrong Tadpoles email or password, or the account uses Google sign-in. |
-| `Huckleberry login failed` | Wrong Huckleberry email or password, or the account has no password login. |
-| `Expected exactly one child` | The Huckleberry account has several children (not supported yet). |
-| No notification | The phone isn't subscribed to the exact `NTFY_TOPIC`, or it isn't set as a secret. Check `npx wrangler tail`. |
-| A scheduled run logs "Skipping cron …" | Expected. One of the two daily crons is always skipped (see [step 2](#2-choose-your-schedule-and-time-zone)). |
-| Entries listed as "not synced" | That Tadpoles entry type isn't supported yet. Add it by hand. |
+| `request failed ... before an HTTP response was received` | The request failed before a response was available. A `TypeError` variant identifies the exception type; neither establishes a bad password. Check the deployed revision and retry to distinguish a transient failure. |
+| `HTTP response body could not be read` | A response arrived, but reading its body failed. Retry a dry run. |
+| `HTTP response body was not valid JSON` | The endpoint returned an unreadable JSON payload. Check for a provider/API change. |
+| `unexpected API response` | JSON parsed, but the response was not an account object. |
+| `login response did not contain a valid authentication token` | The expected token was absent or malformed. |
+| `unsupported account identifier format` | The returned user/child identifier failed validation. |
+| `upstream HTTP ...` | The provider returned a non-success status. Investigate access, availability or API changes using the stage below. |
+
+Local Huckleberry login was also checked in Miniflare/workerd during troubleshooting and returned HTTP 200 with a valid token and user ID. That isolated local success did not prove the deployed request worked; the subsequent JSON response with `login-diagnostics-v3`, successful manual write, and scheduled run verified the production paths.
+
+| Failure stage | What to check |
+|---|---|
+| `configuration` | All four account secrets must exist and be nonblank; `TIMEZONE` must be valid. `npx wrangler secret list` shows secret names, not values. Local `.dev.vars` credentials are not uploaded by deployment. |
+| `tadpoles-login` | Tadpoles email/password secrets, supported password login, and provider availability. A redirect or network/API change can also cause failure. |
+| `tadpoles-report` | Report API response/access; a child-selection error means multiple matching reports were returned. |
+| `mapping` | The report contains an unexpected entry shape. |
+| `huckleberry-login` | Use the detailed failure above; check email/password secrets if the evidence points to authentication. |
+| `huckleberry-child` | The account must have exactly one child with a supported identifier; check account access if an HTTP status is shown. |
+| `huckleberry-read` | Huckleberry/Firestore read permissions or API availability. |
+| `huckleberry-write` / `huckleberry-summary` | Entry preparation, write permissions or summary updates. A write run may have partially completed; check the app before retrying. |
+
+To replace an account credential, use the relevant command and enter the value at its prompt:
+
+```sh
+npx wrangler secret put TADPOLES_EMAIL
+npx wrangler secret put TADPOLES_PASSWORD
+npx wrangler secret put HUCKLEBERRY_EMAIL
+npx wrangler secret put HUCKLEBERRY_PASSWORD
+```
+
+Only update the credentials that need correcting. Keep values out of URLs, logs and issues. After updating secrets, retry the authenticated **dry run** without `write=1`.
+
+### 4. Check scheduling and notifications
+
+**Notification delivery fix:** an earlier hardening revision sent `Cache: no`. [ntfy documents](https://docs.ntfy.sh/publish/#message-caching) that this delivers only to connected subscribers and prevents retrieval after reconnection. This can also disrupt iOS background delivery, which retrieves messages after a push wake-up. The Worker now leaves caching enabled under the server's normal policy; generic status messages remain the default. Update and run `npm run deploy`, then test a real scheduled run with the phone app in the background. Previously uncached messages cannot be recovered by this change.
+
+If you kept your existing public topic and did not enable topic access controls, you do not need a new topic or `NTFY_TOKEN` for this fix. Continue using the same `NTFY_SERVER` and `NTFY_TOPIC`. A private topic remains an optional privacy improvement; configure its access rules and authenticate both publishing and the phone subscription together.
+
+| Symptom | What to check |
+|---|---|
+| No notifications after upgrading, especially with the phone app in the background | Redeploy the notification caching fix described above; also check for publishing failures in Worker logs. |
+| Manual sync worked, but no notification | Expected: manual requests do not send notifications. Use [Testing the deployed cron job today](#testing-the-deployed-cron-job-today) to exercise the full cron path. |
+| Cron logs `Skipping cron …` | The scheduled time is outside `SYNC_HOUR` in `TIMEZONE`. One of the two normal DST-covering crons is expected to skip. A temporary test requires changing both the cron and `SYNC_HOUR`. |
+| Newly added cron has not fired | Allow up to 15 minutes for propagation; schedule a test at least 20 minutes ahead and verify the UTC conversion. |
+| Scheduled sync completed but notification failed | The completion log precedes publishing. Check for a subsequent failure and verify `NTFY_SERVER`, `NTFY_TOPIC`, and optional `NTFY_TOKEN`, topic permissions, and the phone subscription. |
+| Failure notification could not be delivered | Check ntfy access/configuration and availability; the original sync may also have failed. |
+| Notifications contain only generic status | Expected unless `NOTIFICATION_DETAILS` is explicitly `"true"`. |
+| Entries listed as unsupported | That Tadpoles entry type is not supported yet; review it in the app and add it by hand if needed. |
+
+After a temporary scheduled test, remove the extra cron, restore the normal `SYNC_HOUR`, and redeploy. Disabling manual HTTP access afterward does not disable scheduled runs.
 
 ## Development
 
@@ -249,6 +412,7 @@ npm run dev         # local Worker; /sync works, plus /__scheduled?cron=... to f
 | `src/huckleberry.ts` | Huckleberry client (Firebase Auth + Firestore REST) |
 | `src/notify.ts` | ntfy notifications and summary text |
 | `src/time.ts` | Time zone helpers |
+| `src/errors.ts` | Safe failure stages/reasons and numeric HTTP status diagnostics |
 | `test/fixtures/daily-report.json` | A Tadpoles report with names/IDs scrubbed; original routine timestamps remain |
 
 Changing what gets synced usually means editing `src/mapping.ts` and adding a case to `test/mapping.test.ts`.
