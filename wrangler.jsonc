@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "huckleberry-tadpoles-sync",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-16",
+  "observability": { "enabled": true },
+  "triggers": {
+    // 5pm Eastern, after pickup. Cron is UTC, so fire at both 21:00 (EDT) and 22:00 (EST);
+    // the handler skips whichever one isn't SYNC_HOUR in TIMEZONE.
+    "crons": ["0 21 * * 1-5", "0 22 * * 1-5"]
+  },
+  "vars": {
+    "TIMEZONE": "America/New_York",
+    "SYNC_HOUR": "17",
+    "NTFY_SERVER": "https://ntfy.sh"
+  }
+  // Secrets (wrangler secret put / .dev.vars):
+  //   TADPOLES_EMAIL, TADPOLES_PASSWORD, HUCKLEBERRY_EMAIL, HUCKLEBERRY_PASSWORD, SYNC_TOKEN,
+  //   NTFY_TOPIC (long random name; anyone who knows it can read the notifications)
+}
