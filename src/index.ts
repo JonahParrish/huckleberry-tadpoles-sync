@@ -1,3 +1,4 @@
+import { safeDiagnostic } from "./errors";
 import { notify, summarize } from "./notify";
 import { syncDate } from "./sync";
 import { localDate, localHour } from "./time";
@@ -17,8 +18,8 @@ export default {
 			console.log("Scheduled sync completed");
 			await notify(env, env.NOTIFICATION_DETAILS === "true" ? subject : "Daycare sync completed",
 				env.NOTIFICATION_DETAILS === "true" ? text : "Sync completed. Use an authenticated manual dry run to review details.");
-		} catch {
-			console.error("Scheduled sync or notification failed");
+		} catch (error) {
+			console.error("Scheduled sync or notification failed", safeDiagnostic(error));
 			try {
 				await notify(env, "Daycare sync FAILED", "The sync or its notification failed. Review account access and retry with an authenticated manual dry run.", true);
 			} catch {
@@ -48,8 +49,8 @@ export default {
 		try {
 			const result = await syncDate(env, date, write !== "1");
 			return Response.json({ summary: summarize(result, env.TIMEZONE), result }, { headers });
-		} catch {
-			return reply("Sync failed; check account access and configuration", 502);
+		} catch (error) {
+			return reply(safeDiagnostic(error), 502);
 		}
 	},
 } satisfies ExportedHandler<Env>;

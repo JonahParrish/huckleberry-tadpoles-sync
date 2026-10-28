@@ -1,3 +1,4 @@
+import { safeDiagnostic, SyncFailure } from "../src/errors";
 import { timingSafeEqual, webcrypto } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
@@ -106,11 +107,11 @@ describe("account selection", () => {
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ status: "ok", payload: { daily_reports: [
 			{ date: "2026-06-12", entries: [] }, { date: "2026-06-12", entries: [] },
 		] } })));
-		await expect(new TadpolesClient("e", "p", "UTC").getDailyReports("2026-06-12")).rejects.toThrow("Multiple Tadpoles reports");
+		await expect(new TadpolesClient("e", "p", "UTC").getDailyReports("2026-06-12")).rejects.toMatchObject({ stage: "tadpoles-report", reason: "child-selection" });
 	});
 	it.each(["../another-user", "u1?query=value", undefined])("rejects invalid authenticated user IDs", async (localId) => {
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ idToken: "tok", localId })));
-		await expect(new HuckleberryClient("e", "p").login()).rejects.toThrow("Invalid Huckleberry user ID");
+		await expect(new HuckleberryClient("e", "p").login()).rejects.toMatchObject({ stage: "huckleberry-login", reason: "invalid-account-id" });
 	});
 	it.each(["../other-child", "c1?query=value", undefined])("rejects invalid child IDs before interval access", async (cid) => {
 		const fetchMock = vi.fn()
@@ -119,8 +120,27 @@ describe("account selection", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		const client = new HuckleberryClient("e", "p");
 		await client.login();
-		await expect(client.getChildId()).rejects.toThrow("Invalid Huckleberry child ID");
+		await expect(client.getChildId()).rejects.toMatchObject({ stage: "huckleberry-child", reason: "invalid-account-id" });
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+});
+
+
+describe("safe diagnostics", () => {
+	it("reports stage and HTTP status to authenticated callers", async () => {
+		vi.mocked(syncDate).mockRejectedValue(new SyncFailure("tadpoles-login", "unexpected", 403));
+		const res = await run(request());
+		expect(res.status).toBe(502);
+		expect(await res.text()).toBe("Sync failed: tadpoles-login (upstream HTTP 403)");
+		expect(res.headers.get("Cache-Control")).toBe("no-store");
+	});
+	it("never renders arbitrary error fields or messages", () => {
+		expect(safeDiagnostic(new Error("PRIVATE DATA"))).toBe("Sync failed: unexpected error");
+		const error = new SyncFailure("configuration", "missing-credentials");
+		error.message = "PRIVATE DATA";
+		expect(safeDiagnostic(error)).toBe("Sync failed: configuration (required account credentials are missing or blank)");
+		expect(safeDiagnostic(new SyncFailure("PRIVATE DATA" as any))).not.toContain("PRIVATE DATA");
+		expect(safeDiagnostic(new SyncFailure("configuration", "PRIVATE DATA" as any))).not.toContain("PRIVATE DATA");
 	});
 });
 
@@ -133,7 +153,7 @@ describe("redirect refusal on Workers", () => {
 			return new Response(null, { status, headers: { Location: "https://untrusted.example/" } });
 		});
 		vi.stubGlobal("fetch", fetchMock);
-		await expect(new HuckleberryClient("e", "p").login()).rejects.toThrow(String(status));
+		await expect(new HuckleberryClient("e", "p").login()).rejects.toMatchObject({ status });
 		await expect(notify(env, "t", "m")).rejects.toThrow(String(status));
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		for (const [url] of fetchMock.mock.calls) expect(String(url)).not.toContain("untrusted.example");
@@ -147,7 +167,7 @@ describe("redirect refusal on Workers", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		const client = new HuckleberryClient("e", "p");
 		await client.login();
-		await expect(client.getChildId()).rejects.toThrow("307");
+		await expect(client.getChildId()).rejects.toMatchObject({ status: 307 });
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 });

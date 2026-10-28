@@ -1,3 +1,4 @@
+import { SyncFailure, UpstreamHttpError, type SyncStage } from "./errors";
 import { double } from "./firestore";
 import { HuckleberryClient, type Interval, type TrackerCollection } from "./huckleberry";
 import { planReport, type PlannedEntry, type Skipped } from "./mapping";
@@ -19,61 +20,80 @@ export interface SyncResult {
 }
 
 export async function syncDate(env: Env, date: string, dryRun: boolean): Promise<SyncResult> {
-	const result: SyncResult = {
-		date,
-		dryRun,
-		reportFound: false,
-		published: false,
-		created: [],
-		alreadySynced: [],
-		alreadyLoggedManually: [],
-		skipped: [],
-	};
-
-	const tadpoles = new TadpolesClient(env.TADPOLES_EMAIL, env.TADPOLES_PASSWORD, env.TIMEZONE);
-	await tadpoles.login();
-	const [report] = await tadpoles.getDailyReports(date);
-	if (!report) return result;
-	result.reportFound = true;
-	result.published = report.published;
-
-	const plan = planReport(report);
-	result.skipped = plan.skipped;
-
-	const huckleberry = new HuckleberryClient(env.HUCKLEBERRY_EMAIL, env.HUCKLEBERRY_PASSWORD);
-	await huckleberry.login();
-	const childId = await huckleberry.getChildId();
-
-	// Look a little past the day's edges so naps/diapers near midnight still match.
-	const [dayStart, dayEnd] = localDayBounds(date, env.TIMEZONE);
-	const existing: Record<TrackerCollection, Interval[]> = { diaper: [], feed: [], sleep: [] };
-	for (const collection of Object.keys(existing) as TrackerCollection[]) {
-		existing[collection] = await huckleberry.listIntervals(collection, childId, dayStart - 86_400, dayEnd + 86_400);
-	}
-
-	for (const entry of plan.entries) {
-		const collection = collectionFor(entry);
-		const id = await intervalId(entry);
-		if (existing[collection].some((i) => i.id === id)) {
-			result.alreadySynced.push(entry);
-		} else if (existing[collection].some((i) => matchesManualEntry(entry, i))) {
-			result.alreadyLoggedManually.push(entry);
-		} else if (dryRun) {
-			result.created.push(entry);
-		} else if (await huckleberry.createInterval(collection, childId, id, intervalData(entry, env.TIMEZONE))) {
-			result.created.push(entry);
-		} else {
-			result.alreadySynced.push(entry);
+	let stage: SyncStage = "configuration";
+	try {
+		for (const key of ["TADPOLES_EMAIL", "TADPOLES_PASSWORD", "HUCKLEBERRY_EMAIL", "HUCKLEBERRY_PASSWORD"] as const) {
+			if (typeof env[key] !== "string" || !env[key].trim()) throw new SyncFailure(stage, "missing-credentials");
 		}
-	}
+		// Validate the timezone before any account request.
+		new Intl.DateTimeFormat("en-US", { timeZone: env.TIMEZONE }).format();
+		const result: SyncResult = {
+			date,
+			dryRun,
+			reportFound: false,
+			published: false,
+			created: [],
+			alreadySynced: [],
+			alreadyLoggedManually: [],
+			skipped: [],
+		};
 
-	// Free-plan Workers get 50 subrequests per run, so the app's "last diaper/bottle/sleep" summaries
-	// are updated once per type, from the latest entry written, rather than after every entry.
-	if (!dryRun) {
-		const latestByKind = new Map(result.created.map((e) => [e.kind, e])); // entries are sorted by start
-		for (const entry of latestByKind.values()) await updateLastPrefs(huckleberry, childId, entry, env.TIMEZONE);
+		const tadpoles = new TadpolesClient(env.TADPOLES_EMAIL, env.TADPOLES_PASSWORD, env.TIMEZONE);
+		stage = "tadpoles-login";
+		await tadpoles.login();
+		stage = "tadpoles-report";
+		const [report] = await tadpoles.getDailyReports(date);
+		if (!report) return result;
+		result.reportFound = true;
+		result.published = report.published;
+
+		stage = "mapping";
+		const plan = planReport(report);
+		result.skipped = plan.skipped;
+
+		const huckleberry = new HuckleberryClient(env.HUCKLEBERRY_EMAIL, env.HUCKLEBERRY_PASSWORD);
+		stage = "huckleberry-login";
+		await huckleberry.login();
+		stage = "huckleberry-child";
+		const childId = await huckleberry.getChildId();
+
+		// Look a little past the day's edges so naps/diapers near midnight still match.
+		stage = "huckleberry-read";
+		const [dayStart, dayEnd] = localDayBounds(date, env.TIMEZONE);
+		const existing: Record<TrackerCollection, Interval[]> = { diaper: [], feed: [], sleep: [] };
+		for (const collection of Object.keys(existing) as TrackerCollection[]) {
+			existing[collection] = await huckleberry.listIntervals(collection, childId, dayStart - 86_400, dayEnd + 86_400);
+		}
+
+		stage = "huckleberry-write";
+		for (const entry of plan.entries) {
+			const collection = collectionFor(entry);
+			const id = await intervalId(entry);
+			if (existing[collection].some((i) => i.id === id)) {
+				result.alreadySynced.push(entry);
+			} else if (existing[collection].some((i) => matchesManualEntry(entry, i))) {
+				result.alreadyLoggedManually.push(entry);
+			} else if (dryRun) {
+				result.created.push(entry);
+			} else if (await huckleberry.createInterval(collection, childId, id, intervalData(entry, env.TIMEZONE))) {
+				result.created.push(entry);
+			} else {
+				result.alreadySynced.push(entry);
+			}
+		}
+
+		// Free-plan Workers get 50 subrequests per run, so the app's "last diaper/bottle/sleep" summaries
+		// are updated once per type, from the latest entry written, rather than after every entry.
+		stage = "huckleberry-summary";
+		if (!dryRun) {
+			const latestByKind = new Map(result.created.map((e) => [e.kind, e])); // entries are sorted by start
+			for (const entry of latestByKind.values()) await updateLastPrefs(huckleberry, childId, entry, env.TIMEZONE);
+		}
+		return result;
+	} catch (error) {
+		if (error instanceof SyncFailure) throw error;
+		throw new SyncFailure(stage, "unexpected", error instanceof UpstreamHttpError ? error.status : undefined);
 	}
-	return result;
 }
 
 function collectionFor(entry: PlannedEntry): TrackerCollection {

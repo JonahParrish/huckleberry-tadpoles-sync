@@ -1,3 +1,5 @@
+import { SyncFailure, UpstreamHttpError } from "./errors";
+
 // Unofficial Tadpoles parent API. Login flow mirrors leocov-dev/tadpoles-backup:
 // POST /auth/login (form) → POST /remote/v1/athome/admit → session cookies.
 
@@ -53,10 +55,10 @@ export class TadpolesClient {
 		});
 		const body = (await res.json()) as { status: string; payload?: { daily_reports?: TadpolesDailyReport[] } };
 		if (body.status !== "ok" || !body.payload?.daily_reports) {
-			throw new Error("Tadpoles daily report query returned an unexpected body");
+			throw new SyncFailure("tadpoles-report", "invalid-response");
 		}
 		const reports = body.payload.daily_reports.filter((r) => r.date === date);
-		if (reports.length > 1) throw new Error("Multiple Tadpoles reports found; refusing to choose a child implicitly");
+		if (reports.length > 1) throw new SyncFailure("tadpoles-report", "child-selection");
 		return reports;
 	}
 
@@ -76,7 +78,7 @@ export class TadpolesClient {
 			this.cookies.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
 		}
 		if (!res.ok) {
-			throw new Error(`Tadpoles ${init.method} ${url.pathname} failed: ${res.status}`);
+			throw new UpstreamHttpError(res.status);
 		}
 		return res;
 	}

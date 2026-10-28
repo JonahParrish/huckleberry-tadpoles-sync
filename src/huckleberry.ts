@@ -1,3 +1,4 @@
+import { SyncFailure, UpstreamHttpError } from "./errors";
 // Unofficial Huckleberry client: Firebase Auth + Firestore REST. Document shapes mirror
 // Woyken/py-huckleberry-api, which matches what the Huckleberry apps write.
 import { decodeFields, double, encodeFields, type FirestoreValue } from "./firestore";
@@ -36,10 +37,10 @@ export class HuckleberryClient {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ email: this.email, password: this.password, returnSecureToken: true }),
 		});
-		if (!res.ok) throw new Error(`Huckleberry login failed: ${res.status}`);
+		if (!res.ok) throw new UpstreamHttpError(res.status);
 		const data = (await res.json()) as { idToken: string; localId: string };
 		this.idToken = data.idToken;
-		if (typeof data.localId !== "string" || !/^[A-Za-z0-9_-]+$/.test(data.localId)) throw new Error("Invalid Huckleberry user ID");
+		if (typeof data.localId !== "string" || !/^[A-Za-z0-9_-]+$/.test(data.localId)) throw new SyncFailure("huckleberry-login", "invalid-account-id");
 		this.uid = data.localId;
 	}
 
@@ -47,9 +48,9 @@ export class HuckleberryClient {
 		const user = await this.getDocument(`users/${this.uid}`);
 		const children = (user?.childList ?? []) as { cid: string }[];
 		if (children.length !== 1) {
-			throw new Error(`Expected exactly one child on the Huckleberry account, found ${children.length}`);
+			throw new SyncFailure("huckleberry-child", "child-selection");
 		}
-		if (typeof children[0]?.cid !== "string" || !/^[A-Za-z0-9_-]+$/.test(children[0].cid)) throw new Error("Invalid Huckleberry child ID");
+		if (typeof children[0]?.cid !== "string" || !/^[A-Za-z0-9_-]+$/.test(children[0].cid)) throw new SyncFailure("huckleberry-child", "invalid-account-id");
 		return children[0].cid;
 	}
 
@@ -139,7 +140,7 @@ export class HuckleberryClient {
 			headers: { Authorization: `Bearer ${this.idToken}`, "Content-Type": "application/json" },
 		});
 		if (!res.ok && !allowStatuses.includes(res.status)) {
-			throw new Error(`Huckleberry ${init.method} request failed: ${res.status}`);
+			throw new UpstreamHttpError(res.status);
 		}
 		return res;
 	}

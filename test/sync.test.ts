@@ -154,4 +154,38 @@ describe("syncDate", () => {
 		await syncDate(env, "2026-06-12", false);
 		expect(services.data("feed/c1").prefs).toMatchObject({ lastBottle: { start: 1781300780 } });
 	});
+
+	it("rejects missing credentials before contacting either service", async () => {
+		await expect(syncDate({ ...env, HUCKLEBERRY_PASSWORD: "" }, "2026-06-12", true)).rejects.toMatchObject({ stage: "configuration", reason: "missing-credentials" });
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["/auth/login", "tadpoles-login"],
+		["/remote/v2/activities/daily_report/parent/query", "tadpoles-report"],
+		["/v1/accounts:signInWithPassword", "huckleberry-login"],
+		[`${DOCS}users/u1`, "huckleberry-child"],
+		[`${DOCS}diaper/c1:runQuery`, "huckleberry-read"],
+		[`${DOCS}diaper/c1/intervals`, "huckleberry-write"],
+		[`${DOCS}diaper/c1`, "huckleberry-summary"],
+	])("classifies upstream failures at %s without retaining response content", async (path, stage) => {
+		vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			const url = new URL(input instanceof Request ? input.url : input);
+			if (url.pathname === path) return new Response("PRIVATE ACCOUNT DATA", { status: 403 });
+			return services.fetch(input, init);
+		}));
+		try {
+			await syncDate(env, "2026-06-12", false);
+			expect.fail("Expected sync failure");
+		} catch (error) {
+			expect(error).toMatchObject({ stage, status: 403 });
+			expect(JSON.stringify(error)).not.toContain("PRIVATE ACCOUNT DATA");
+		}
+	});
+
+	it("does not retain network exception messages", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("PRIVATE URL AND TOKEN")));
+		await expect(syncDate(env, "2026-06-12", true)).rejects.toMatchObject({ stage: "tadpoles-login", reason: "unexpected", message: "Sync failed" });
+	});
+
 });
