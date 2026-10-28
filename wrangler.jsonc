@@ -13,7 +13,8 @@
   "vars": {
     "TIMEZONE": "America/New_York",
     "SYNC_HOUR": "17",
-    "NTFY_SERVER": "https://ntfy.sh"
+    "NTFY_SERVER": "https://ntfy.sh",
+    "MANUAL_SYNC_ENABLED": "true"
   }
   // Secrets (wrangler secret put / .dev.vars):
   //   TADPOLES_EMAIL, TADPOLES_PASSWORD, HUCKLEBERRY_EMAIL, HUCKLEBERRY_PASSWORD, SYNC_TOKEN,
