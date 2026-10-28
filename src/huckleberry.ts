@@ -30,18 +30,37 @@ export class HuckleberryClient {
 	) {}
 
 	async login(): Promise<void> {
-		const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`, {
-			method: "POST",
-			// Workers supports manual/follow only; reject returned redirects via the status check.
-			redirect: "manual",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ email: this.email, password: this.password, returnSecureToken: true }),
-		});
+		let res: Response;
+		try {
+			res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`, {
+				method: "POST",
+				// Workers supports manual/follow only; reject returned redirects via the status check.
+				redirect: "manual",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ email: this.email, password: this.password, returnSecureToken: true }),
+			});
+		} catch (error) {
+			throw new SyncFailure("huckleberry-login", error instanceof TypeError ? "request-type-error" : "request-failed");
+		}
 		if (!res.ok) throw new UpstreamHttpError(res.status);
-		const data = (await res.json()) as { idToken: string; localId: string };
-		this.idToken = data.idToken;
-		if (typeof data.localId !== "string" || !/^[A-Za-z0-9_-]+$/.test(data.localId)) throw new SyncFailure("huckleberry-login", "invalid-account-id");
-		this.uid = data.localId;
+		let body: string;
+		try {
+			body = await res.text();
+		} catch {
+			throw new SyncFailure("huckleberry-login", "response-read-failed");
+		}
+		let data: unknown;
+		try {
+			data = JSON.parse(body);
+		} catch {
+			throw new SyncFailure("huckleberry-login", "invalid-json");
+		}
+		if (!data || typeof data !== "object" || Array.isArray(data)) throw new SyncFailure("huckleberry-login", "invalid-response");
+		const account = data as { idToken?: unknown; localId?: unknown };
+		if (typeof account.localId !== "string" || !/^[A-Za-z0-9_-]+$/.test(account.localId)) throw new SyncFailure("huckleberry-login", "invalid-account-id");
+		if (typeof account.idToken !== "string" || !account.idToken || /\s/.test(account.idToken)) throw new SyncFailure("huckleberry-login", "missing-token");
+		this.idToken = account.idToken;
+		this.uid = account.localId;
 	}
 
 	async getChildId(): Promise<string> {

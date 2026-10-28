@@ -31,7 +31,7 @@ export default {
 
 	/** Manual runs are opt-in; GET previews, POST with write=1 writes. */
 	async fetch(request, env): Promise<Response> {
-		const headers = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
+		const headers = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Sync-Build": "login-diagnostics-v3" };
 		const reply = (body: string, status: number) => new Response(body, { status, headers });
 		const url = new URL(request.url);
 		if (env.MANUAL_SYNC_ENABLED !== "true" || url.pathname !== "/sync") return reply("Not found", 404);

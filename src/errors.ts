@@ -1,6 +1,6 @@
 /** Only fixed diagnostic labels and numeric HTTP statuses may cross the error boundary. */
 export type SyncStage = "configuration" | "tadpoles-login" | "tadpoles-report" | "mapping" | "huckleberry-login" | "huckleberry-child" | "huckleberry-read" | "huckleberry-write" | "huckleberry-summary";
-export type FailureReason = "unexpected" | "missing-credentials" | "child-selection" | "invalid-account-id" | "invalid-response";
+export type FailureReason = "unexpected" | "missing-credentials" | "child-selection" | "invalid-account-id" | "invalid-response" | "request-failed" | "request-type-error" | "response-read-failed" | "invalid-json" | "missing-token";
 
 export class UpstreamHttpError extends Error {
 	constructor(readonly status: number) {
@@ -21,6 +21,11 @@ const reasons: Record<FailureReason, string> = {
 	"child-selection": "expected exactly one child/report",
 	"invalid-account-id": "unsupported account identifier format",
 	"invalid-response": "unexpected API response",
+	"request-failed": "request failed before an HTTP response was received",
+	"request-type-error": "request failed with TypeError before an HTTP response was received",
+	"response-read-failed": "HTTP response body could not be read",
+	"invalid-json": "HTTP response body was not valid JSON",
+	"missing-token": "login response did not contain a valid authentication token",
 };
 
 export function safeDiagnostic(error: unknown): string {

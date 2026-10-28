@@ -171,3 +171,40 @@ describe("redirect refusal on Workers", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 });
+
+
+describe("login diagnostic revision", () => {
+	it("identifies the diagnostic revision in manual response headers", async () => {
+		const response = await run(request());
+		expect(response.headers.get("X-Sync-Build")).toBe("login-diagnostics-v3");
+	});
+	it.each([
+		["not json PRIVATE DATA", "invalid-json"],
+		["null", "invalid-response"],
+		["[]", "invalid-response"],
+		[JSON.stringify({ localId: "u1" }), "missing-token"],
+		[JSON.stringify({ localId: "u1", idToken: "tok\nPRIVATE DATA" }), "missing-token"],
+	])("classifies malformed login responses without exposing contents", async (body, reason) => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body)));
+		await expect(new HuckleberryClient("e", "p").login()).rejects.toMatchObject({ stage: "huckleberry-login", reason });
+	});
+	it.each([
+		[new TypeError("PRIVATE URL AND TOKEN"), "request-type-error"],
+		[new Error("PRIVATE URL AND TOKEN"), "request-failed"],
+	])("classifies transport failures without retaining exception details", async (error, reason) => {
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(error));
+		try {
+			await new HuckleberryClient("e", "p").login();
+			expect.fail("Expected failure");
+		} catch (failure) {
+			expect(failure).toMatchObject({ stage: "huckleberry-login", reason });
+			expect(safeDiagnostic(failure)).not.toContain("PRIVATE");
+			expect(JSON.stringify(failure)).not.toContain("PRIVATE");
+		}
+	});
+	it("distinguishes a failed response-body read from a failed request", async () => {
+		const response = new Response(new ReadableStream({ start(controller) { controller.error(new Error("PRIVATE DATA")); } }));
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+		await expect(new HuckleberryClient("e", "p").login()).rejects.toMatchObject({ stage: "huckleberry-login", reason: "response-read-failed" });
+	});
+});
