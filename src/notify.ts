@@ -43,7 +43,8 @@ export async function notify(env: Env, title: string, message: string, failure =
 	if (env.NTFY_TOKEN) headers.set("Authorization", `Bearer ${env.NTFY_TOKEN}`);
 	const res = await fetch(env.NTFY_SERVER, {
 		method: "POST",
-		redirect: "error",
+		// Workers supports manual/follow only; reject returned redirects via the status check.
+		redirect: "manual",
 		headers,
 		body: JSON.stringify({
 			topic: env.NTFY_TOPIC,

@@ -64,7 +64,7 @@ describe("notification and error privacy", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		await notify({ ...env, NTFY_TOKEN: "private-token" }, "title", "message");
 		const init = fetchMock.mock.calls[0][1];
-		expect(init.redirect).toBe("error");
+		expect(init.redirect).toBe("manual");
 		expect(init.headers.get("Authorization")).toBe("Bearer private-token");
 		expect(init.headers.get("Cache")).toBe("no");
 		await expect(notify({ ...env, NTFY_SERVER: "http://example.com" } as any, "t", "m")).rejects.toThrow("HTTPS");
@@ -120,6 +120,34 @@ describe("account selection", () => {
 		const client = new HuckleberryClient("e", "p");
 		await client.login();
 		await expect(client.getChildId()).rejects.toThrow("Invalid Huckleberry child ID");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+});
+
+
+describe("redirect refusal on Workers", () => {
+	it.each([301, 302, 303, 307, 308])("does not follow HTTP %s from credential-bearing endpoints", async (status) => {
+		const fetchMock = vi.fn().mockImplementation(async (_url: unknown, init: RequestInit) => {
+			// Model Workers rejecting unsupported redirect modes before sending a request.
+			if (init.redirect !== "manual") throw new TypeError("Unsupported redirect mode");
+			return new Response(null, { status, headers: { Location: "https://untrusted.example/" } });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(new HuckleberryClient("e", "p").login()).rejects.toThrow(String(status));
+		await expect(notify(env, "t", "m")).rejects.toThrow(String(status));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		for (const [url] of fetchMock.mock.calls) expect(String(url)).not.toContain("untrusted.example");
+	});
+	it("uses manual mode for Firestore requests and refuses redirects", async () => {
+		const fetchMock = vi.fn().mockImplementation(async (_url: unknown, init: RequestInit) => {
+			if (init.redirect !== "manual") throw new TypeError("Unsupported redirect mode");
+			if (fetchMock.mock.calls.length === 1) return Response.json({ idToken: "tok", localId: "u1" });
+			return new Response(null, { status: 307, headers: { Location: "https://untrusted.example/" } });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const client = new HuckleberryClient("e", "p");
+		await client.login();
+		await expect(client.getChildId()).rejects.toThrow("307");
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 });

@@ -31,7 +31,8 @@ export class HuckleberryClient {
 	async login(): Promise<void> {
 		const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`, {
 			method: "POST",
-			redirect: "error",
+			// Workers supports manual/follow only; reject returned redirects via the status check.
+			redirect: "manual",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ email: this.email, password: this.password, returnSecureToken: true }),
 		});
@@ -133,7 +134,8 @@ export class HuckleberryClient {
 		if (!this.idToken) throw new Error("HuckleberryClient.login() must be called first");
 		const res = await fetch(url, {
 			...init,
-			redirect: "error",
+			// Workers supports manual/follow only; reject returned redirects via the status check.
+			redirect: "manual",
 			headers: { Authorization: `Bearer ${this.idToken}`, "Content-Type": "application/json" },
 		});
 		if (!res.ok && !allowStatuses.includes(res.status)) {
