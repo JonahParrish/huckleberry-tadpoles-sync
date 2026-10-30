@@ -314,9 +314,7 @@ Or open the Worker's **Observability** tab in the Cloudflare dashboard.
 - **Manual access:** disabled unless explicitly enabled, protected by a Bearer token of at least 32 characters, and uncached. GET previews; POST with `write=1` writes. A stolen token permits reading historical sync results and triggering writes. There is no built-in rate limit; disable manual access when unused or protect it with Cloudflare Access/rate limits.
 - **Child selection:** Huckleberry must have exactly one child. Multiple matching Tadpoles reports cause the sync to stop rather than silently choosing one. This does not verify that the sole child on each account is the same person; check your first dry run.
 - **Firebase app key:** the key in `src/huckleberry.ts` is public client configuration, not an account credential. Data access must be enforced by the provider's authentication and Firestore rules, which this repository cannot audit.
-- **Test fixture:** names and source IDs are scrubbed, but the fixture retains the original date, routine timestamps and amounts. Treat it as personal routine data if sharing this repository. Editing the current fixture cannot remove copies already in Git history.
-
-See [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for findings, changes and remaining deployment checks.
+- **Test fixture:** derived from a real Tadpoles report, with names and IDs removed and every date and time shifted to a made-up day. It contains no real routine data.
 
 ## Troubleshooting
 
@@ -440,7 +438,7 @@ npm run dev         # local Worker; /sync works, plus /__scheduled?cron=... to f
 | `src/notify.ts` | ntfy notifications and summary text |
 | `src/time.ts` | Time zone helpers |
 | `src/errors.ts` | Safe failure stages/reasons and numeric HTTP status diagnostics |
-| `test/fixtures/daily-report.json` | A Tadpoles report with names/IDs scrubbed; original routine timestamps remain |
+| `test/fixtures/daily-report.json` | A Tadpoles report with names/IDs removed and dates/times shifted to a made-up day |
 
 Changing what gets synced usually means editing `src/mapping.ts` and adding a case to `test/mapping.test.ts`.
 
