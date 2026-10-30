@@ -52,7 +52,6 @@ When it finishes, it sends a push notification to your phone (via [ntfy](https:/
 
 - **Tadpoles parent account** that signs in with **email and password**.
   - Google sign-in isn't supported.
-  - The Bright Horizons version of Tadpoles isn't supported. It uses a different login.
 - **Huckleberry account** that signs in with **email and password**.
   - If you use Google or Apple sign-in, add a password login in the Huckleberry app first.
   - The account must have **exactly one child**. The sync stops with an error otherwise.
@@ -212,6 +211,32 @@ After deployment, confirm the next scheduled run in `npx wrangler tail` or the C
 - **On failure:** a high-priority generic alert. Raw exceptions, upstream response bodies and account identifiers are excluded.
 - **Detailed notifications:** set `NOTIFICATION_DETAILS` to `"true"` in Wrangler vars to include counts, routine details, skipped entries and publication warnings. Use a private topic before opting in.
 
+### Testing notifications without running a sync
+
+A public ntfy.sh topic works with the Worker; self-hosting and `NTFY_TOKEN` are not required. Keep `NTFY_SERVER` as `https://ntfy.sh` and `NTFY_TOPIC` equal to the topic subscribed to in your phone app. Use an authentication token only if you configure topic access controls.
+
+To test the **deployed** notification path immediately, enable `MANUAL_SYNC_ENABLED`, deploy the current code, and use the same terminal `$TOKEN` as for manual sync (see the token prompt below):
+
+```sh
+curl -i -X POST -H "Authorization: Bearer $TOKEN" \
+  "https://huckleberry-tadpoles-sync.<your-subdomain>.workers.dev/notify-test"
+```
+
+This route publishes a fixed generic test message using the deployed Worker's ntfy settings. It does not contact Tadpoles or Huckleberry, write tracker data, accept arbitrary message contents, or depend on the cron hour. It requires the same Bearer authorization and manual-access opt-in as `/sync`.
+
+The diagnostic revision header is `X-Sync-Build: notification-diagnostics-v1`. A successful response contains `"accepted": true` and `"status": 200` (or another successful ntfy HTTP status). This means ntfy returned a matching publication acknowledgment; it **does not** confirm a phone alert was displayed. Check the topic in the app and your phone's notification settings. If it appears in the app but produces no alert, check topic muting, notification permissions, Focus/Do Not Disturb and background delivery. If it is absent entirely, verify the exact server/topic subscription and the deployed `NTFY_TOPIC` secret. Replace that secret with `npx wrangler secret put NTFY_TOPIC` only if it differs from the subscribed topic.
+
+Failures return safe diagnostics such as `Sync failed: ntfy-publish (upstream HTTP 429)`; no topic name, token, message payload or upstream response body is returned. HTTP 401/403 from ntfy means access was rejected; HTTP 429 means the publisher was rate-limited. A request failure means no HTTP response was obtained. A successful status with an invalid acknowledgment is reported as an unexpected API response instead of claiming publication succeeded.
+
+For scheduled runs, distinguish these log messages:
+
+- `Skipping cron ...`: no sync or notification was attempted; a successful Cloudflare invocation alone does not prove the job ran.
+- `Scheduled sync completed`: the sync finished, but publishing has not yet completed.
+- `Notification accepted by ntfy`: ntfy acknowledged the scheduled notification. If the phone still has no alert, check the subscription/client delivery path.
+- `Scheduled sync or notification failed` with `ntfy-publish`: publishing failed after the sync; use the safe status/reason to troubleshoot.
+
+A direct publish followed by a cache poll using local settings can verify the local topic, but does not prove the deployed Worker has the same topic secret. Also allow a short interval before polling a freshly published message; an immediate cache read may not see it yet.
+
 ### Running a day by hand
 
 Manual access is **disabled by default**. To enable it in production, add `"MANUAL_SYNC_ENABLED": "true"` to Wrangler `vars` and redeploy. Set `SYNC_TOKEN` to a random value of at least 32 characters (`openssl rand -hex 32` generates 64). Disable manual access again when you no longer need it.
@@ -319,10 +344,10 @@ curl -i -H "Authorization: Bearer $TOKEN" \
 This revision returns:
 
 ```text
-X-Sync-Build: login-diagnostics-v3
+X-Sync-Build: notification-diagnostics-v1
 ```
 
-Header names may appear lowercase. This value identifies the diagnostic revision, not a unique deployment ID. If it is absent or different, check that you deployed from the updated checkout and are calling the correct Worker's main URL. A successful JSON response with this header confirms that the deployed sync works; review the result before switching to POST with `write=1`.
+Header names may appear lowercase. `login-diagnostics-v3` identifies the older login diagnostic revision; `notification-diagnostics-v1` additionally includes the deployed notification test and acknowledgment logging. These values identify diagnostic revisions, not unique deployment IDs. If it is absent or different, check that you deployed from the updated checkout and are calling the correct Worker's main URL. A successful JSON response with this header confirms that the deployed sync works; review the result before switching to POST with `write=1`.
 
 When reporting a failure, share only the `X-Sync-Build` header and the error text. Do not share successful response data unless scrubbed, and avoid `curl -v`, which prints the Authorization header.
 
@@ -364,6 +389,7 @@ Local Huckleberry login was also checked in Miniflare/workerd during troubleshoo
 | `huckleberry-child` | The account must have exactly one child with a supported identifier; check account access if an HTTP status is shown. |
 | `huckleberry-read` | Huckleberry/Firestore read permissions or API availability. |
 | `huckleberry-write` / `huckleberry-summary` | Entry preparation, write permissions or summary updates. A write run may have partially completed; check the app before retrying. |
+| `ntfy-publish` | Notification server/topic configuration, request availability or publish permission/rate limits. Use the deployed `/notify-test` route to test without syncing. |
 
 To replace an account credential, use the relevant command and enter the value at its prompt:
 
@@ -386,6 +412,7 @@ If you kept your existing public topic and did not enable topic access controls,
 |---|---|
 | No notifications after upgrading, especially with the phone app in the background | Redeploy the notification caching fix described above; also check for publishing failures in Worker logs. |
 | Manual sync worked, but no notification | Expected: manual requests do not send notifications. Use [Testing the deployed cron job today](#testing-the-deployed-cron-job-today) to exercise the full cron path. |
+| Cloudflare reports success, but no notification arrived | A skipped invocation is also successful. Look for `Notification accepted by ntfy`, or use `/notify-test` to test publication immediately. |
 | Cron logs `Skipping cron …` | The scheduled time is outside `SYNC_HOUR` in `TIMEZONE`. One of the two normal DST-covering crons is expected to skip. A temporary test requires changing both the cron and `SYNC_HOUR`. |
 | Newly added cron has not fired | Allow up to 15 minutes for propagation; schedule a test at least 20 minutes ahead and verify the UTC conversion. |
 | Scheduled sync completed but notification failed | The completion log precedes publishing. Check for a subsequent failure and verify `NTFY_SERVER`, `NTFY_TOPIC`, and optional `NTFY_TOKEN`, topic permissions, and the phone subscription. |
