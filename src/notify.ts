@@ -1,3 +1,4 @@
+import { SyncFailure } from "./errors";
 import type { PlannedEntry } from "./mapping";
 import type { SyncResult } from "./sync";
 
@@ -33,28 +34,52 @@ export function summarize(result: SyncResult, timeZone: string): { subject: stri
 	return { subject, text };
 }
 
-/** Push notification via ntfy (JSON publish, so non-ASCII titles/messages are safe). */
-export async function notify(env: Env, title: string, message: string, failure = false): Promise<void> {
-	const server = new URL(env.NTFY_SERVER);
-	if (server.protocol !== "https:" || server.username || server.password) {
-		throw new Error("NTFY_SERVER must be an HTTPS URL without embedded credentials");
+export interface NotificationReceipt {
+	accepted: true;
+	status: number;
+}
+
+/** An ntfy acknowledgment confirms publication, not delivery to a phone. */
+export async function notify(env: Env, title: string, message: string, failure = false): Promise<NotificationReceipt> {
+	let server: URL;
+	try {
+		server = new URL(env.NTFY_SERVER);
+	} catch {
+		throw new SyncFailure("ntfy-publish", "invalid-notification-config");
 	}
-	// Leave ntfy caching enabled for background delivery and reconnecting subscribers.
-	// Routine details are excluded by default at the caller.
-	const headers = new Headers({ "Content-Type": "application/json" });
-	if (env.NTFY_TOKEN) headers.set("Authorization", `Bearer ${env.NTFY_TOKEN}`);
-	const res = await fetch(env.NTFY_SERVER, {
-		method: "POST",
-		// Workers supports manual/follow only; reject returned redirects via the status check.
-		redirect: "manual",
-		headers,
-		body: JSON.stringify({
-			topic: env.NTFY_TOPIC,
-			title,
-			message: message.length > 3500 ? `${message.slice(0, 3500)}\n…(truncated)` : message,
-			priority: failure ? 5 : 3,
-			tags: [failure ? "warning" : "baby_bottle"],
-		}),
-	});
-	if (!res.ok) throw new Error(`ntfy publish failed: ${res.status}`);
+	if (server.protocol !== "https:" || server.username || server.password || typeof env.NTFY_TOPIC !== "string" || !env.NTFY_TOPIC.trim()) {
+		throw new SyncFailure("ntfy-publish", "invalid-notification-config");
+	}
+	// Keep normal caching for background delivery and reconnecting subscribers.
+	let res: Response;
+	try {
+		const headers = new Headers({ "Content-Type": "application/json" });
+		if (env.NTFY_TOKEN) headers.set("Authorization", `Bearer ${env.NTFY_TOKEN}`);
+		res = await fetch(env.NTFY_SERVER, {
+			method: "POST",
+			redirect: "manual",
+			headers,
+			body: JSON.stringify({
+				topic: env.NTFY_TOPIC,
+				title,
+				message: message.length > 3500 ? `${message.slice(0, 3500)}\n…(truncated)` : message,
+				priority: failure ? 5 : 3,
+				tags: [failure ? "warning" : "baby_bottle"],
+			}),
+		});
+	} catch {
+		throw new SyncFailure("ntfy-publish", "request-failed");
+	}
+	if (!res.ok) throw new SyncFailure("ntfy-publish", "unexpected", res.status);
+	let receipt: unknown;
+	try {
+		receipt = await res.json();
+	} catch {
+		throw new SyncFailure("ntfy-publish", "invalid-response");
+	}
+	if (!receipt || typeof receipt !== "object" || !("event" in receipt) || receipt.event !== "message" ||
+		!("topic" in receipt) || receipt.topic !== env.NTFY_TOPIC || !("id" in receipt) || typeof receipt.id !== "string" || !receipt.id) {
+		throw new SyncFailure("ntfy-publish", "invalid-response");
+	}
+	return { accepted: true, status: res.status };
 }

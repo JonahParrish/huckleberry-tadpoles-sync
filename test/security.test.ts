@@ -61,7 +61,7 @@ describe("manual endpoint security", () => {
 
 describe("notification and error privacy", () => {
 	it("uses TLS, authentication and no redirects while preserving notification caching", async () => {
-		const fetchMock = vi.fn().mockResolvedValue(new Response("ok"));
+		const fetchMock = vi.fn().mockResolvedValue(Response.json({ event: "message", topic: env.NTFY_TOPIC, id: "test-id" }));
 		vi.stubGlobal("fetch", fetchMock);
 		await notify({ ...env, NTFY_TOKEN: "private-token" }, "title", "message");
 		const init = fetchMock.mock.calls[0][1];
@@ -69,23 +69,25 @@ describe("notification and error privacy", () => {
 		expect(init.headers.get("Authorization")).toBe("Bearer private-token");
 		expect(init.headers.has("Cache")).toBe(false);
 		expect(init.headers.has("X-Cache")).toBe(false);
-		await expect(notify({ ...env, NTFY_SERVER: "http://example.com" } as any, "t", "m")).rejects.toThrow("HTTPS");
+		await expect(notify({ ...env, NTFY_SERVER: "http://example.com" } as any, "t", "m")).rejects.toMatchObject({ stage: "ntfy-publish", reason: "invalid-notification-config" });
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 	it("excludes upstream bodies from client errors", async () => {
 		vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response("PRIVATE ACCOUNT DATA", { status: 403 })));
-		for (const action of [() => new HuckleberryClient("e", "p").login(), () => new TadpolesClient("e", "p", "UTC").login(), () => notify(env, "t", "m")]) {
+		for (const action of [() => new HuckleberryClient("e", "p").login(), () => new TadpolesClient("e", "p", "UTC").login()]) {
 			await expect(action()).rejects.toThrow("403");
 			await expect(action()).rejects.not.toThrow("PRIVATE ACCOUNT DATA");
 		}
+		await expect(notify(env, "t", "m")).rejects.toMatchObject({ stage: "ntfy-publish", status: 403, message: "Sync failed" });
 	});
 	it("keeps detailed results out of scheduled logs and notifications by default", async () => {
-		const fetchMock = vi.fn().mockImplementation(async () => new Response("ok"));
+		const fetchMock = vi.fn().mockImplementation(async () => Response.json({ event: "message", topic: env.NTFY_TOPIC, id: "test-id" }));
 		vi.stubGlobal("fetch", fetchMock);
 		const log = vi.spyOn(console, "log").mockImplementation(() => {});
 		try {
 			await worker.scheduled({ scheduledTime: Date.parse("2026-06-12T21:00:00Z"), cron: "0 21 * * 1-5" } as ScheduledController, env, {} as ExecutionContext);
 			expect(log).toHaveBeenCalledWith("Scheduled sync completed");
+			expect(log).toHaveBeenCalledWith("Notification accepted by ntfy", { status: 200 });
 			const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
 			expect(payload.title).toBe("Daycare sync completed");
 			expect(payload.message).not.toContain("2026-06-12");
@@ -155,7 +157,7 @@ describe("redirect refusal on Workers", () => {
 		});
 		vi.stubGlobal("fetch", fetchMock);
 		await expect(new HuckleberryClient("e", "p").login()).rejects.toMatchObject({ status });
-		await expect(notify(env, "t", "m")).rejects.toThrow(String(status));
+		await expect(notify(env, "t", "m")).rejects.toMatchObject({ stage: "ntfy-publish", status });
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		for (const [url] of fetchMock.mock.calls) expect(String(url)).not.toContain("untrusted.example");
 	});

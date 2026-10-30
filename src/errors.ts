@@ -1,6 +1,6 @@
 /** Only fixed diagnostic labels and numeric HTTP statuses may cross the error boundary. */
-export type SyncStage = "configuration" | "tadpoles-login" | "tadpoles-report" | "mapping" | "huckleberry-login" | "huckleberry-child" | "huckleberry-read" | "huckleberry-write" | "huckleberry-summary";
-export type FailureReason = "unexpected" | "missing-credentials" | "child-selection" | "invalid-account-id" | "invalid-response" | "request-failed" | "request-type-error" | "response-read-failed" | "invalid-json" | "missing-token";
+export type SyncStage = "configuration" | "tadpoles-login" | "tadpoles-report" | "mapping" | "huckleberry-login" | "huckleberry-child" | "huckleberry-read" | "huckleberry-write" | "huckleberry-summary" | "ntfy-publish";
+export type FailureReason = "unexpected" | "missing-credentials" | "child-selection" | "invalid-account-id" | "invalid-response" | "request-failed" | "request-type-error" | "response-read-failed" | "invalid-json" | "missing-token" | "invalid-notification-config";
 
 export class UpstreamHttpError extends Error {
 	constructor(readonly status: number) {
@@ -14,7 +14,7 @@ export class SyncFailure extends Error {
 	}
 }
 
-const stages: readonly string[] = ["configuration", "tadpoles-login", "tadpoles-report", "mapping", "huckleberry-login", "huckleberry-child", "huckleberry-read", "huckleberry-write", "huckleberry-summary"];
+const stages: readonly string[] = ["configuration", "tadpoles-login", "tadpoles-report", "mapping", "huckleberry-login", "huckleberry-child", "huckleberry-read", "huckleberry-write", "huckleberry-summary", "ntfy-publish"];
 const reasons: Record<FailureReason, string> = {
 	unexpected: "unexpected error; possible network failure or unsupported API response",
 	"missing-credentials": "required account credentials are missing or blank",
@@ -26,6 +26,7 @@ const reasons: Record<FailureReason, string> = {
 	"response-read-failed": "HTTP response body could not be read",
 	"invalid-json": "HTTP response body was not valid JSON",
 	"missing-token": "login response did not contain a valid authentication token",
+	"invalid-notification-config": "notification server or topic configuration is invalid",
 };
 
 export function safeDiagnostic(error: unknown): string {

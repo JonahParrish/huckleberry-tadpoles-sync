@@ -16,8 +16,9 @@ export default {
 			const result = await syncDate(env, date, false);
 			const { subject, text } = summarize(result, env.TIMEZONE);
 			console.log("Scheduled sync completed");
-			await notify(env, env.NOTIFICATION_DETAILS === "true" ? subject : "Daycare sync completed",
+			const receipt = await notify(env, env.NOTIFICATION_DETAILS === "true" ? subject : "Daycare sync completed",
 				env.NOTIFICATION_DETAILS === "true" ? text : "Sync completed. Use an authenticated manual dry run to review details.");
+			console.log("Notification accepted by ntfy", { status: receipt.status });
 		} catch (error) {
 			console.error("Scheduled sync or notification failed", safeDiagnostic(error));
 			try {

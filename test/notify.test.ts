@@ -7,9 +7,10 @@ describe("notify", () => {
 	afterEach(() => vi.unstubAllGlobals());
 
 	it("publishes JSON to the topic, high priority on failure, trimmed to ntfy's size limit", async () => {
-		const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("{}"));
+		const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => Response.json({ event: "message", topic: env.NTFY_TOPIC, id: "test-id" }));
 		vi.stubGlobal("fetch", fetchMock);
-		await notify(env, "Daycare sync 2026-06-12 FAILED", "x".repeat(10_000), true);
+		const receipt = await notify(env, "Daycare sync 2026-06-12 FAILED", "x".repeat(10_000), true);
+		expect(receipt).toEqual({ accepted: true, status: 200 });
 
 		const [url, init] = fetchMock.mock.calls[0];
 		expect(url).toBe("https://ntfy.sh");
@@ -23,6 +24,21 @@ describe("notify", () => {
 
 	it("throws when ntfy rejects the message", async () => {
 		vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 429 })));
-		await expect(notify(env, "t", "m")).rejects.toThrow("ntfy publish failed: 429");
+		await expect(notify(env, "t", "m")).rejects.toMatchObject({ stage: "ntfy-publish", status: 429 });
+	});
+});
+
+
+describe("notification acknowledgment", () => {
+	afterEach(() => vi.unstubAllGlobals());
+	it.each([{}, null, { event: "open", topic: "secret-topic", id: "x" }, { event: "message", topic: "wrong-topic", id: "x" }, { event: "message", topic: "secret-topic" }])("rejects a successful HTTP response without a matching publish acknowledgment", async (body) => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(body)));
+		await expect(notify(env, "t", "m")).rejects.toMatchObject({ stage: "ntfy-publish", reason: "invalid-response" });
+	});
+	it("sanitizes invalid JSON and network failures", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("PRIVATE DATA")));
+		await expect(notify(env, "t", "m")).rejects.toMatchObject({ stage: "ntfy-publish", reason: "invalid-response", message: "Sync failed" });
+		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("SECRET TOPIC")));
+		await expect(notify(env, "t", "m")).rejects.toMatchObject({ stage: "ntfy-publish", reason: "request-failed", message: "Sync failed" });
 	});
 });
