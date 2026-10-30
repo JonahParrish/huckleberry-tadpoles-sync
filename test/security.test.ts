@@ -179,7 +179,7 @@ describe("redirect refusal on Workers", () => {
 describe("login diagnostic revision", () => {
 	it("identifies the diagnostic revision in manual response headers", async () => {
 		const response = await run(request());
-		expect(response.headers.get("X-Sync-Build")).toBe("login-diagnostics-v3");
+		expect(response.headers.get("X-Sync-Build")).toBe("notification-diagnostics-v1");
 	});
 	it.each([
 		["not json PRIVATE DATA", "invalid-json"],
@@ -209,5 +209,54 @@ describe("login diagnostic revision", () => {
 		const response = new Response(new ReadableStream({ start(controller) { controller.error(new Error("PRIVATE DATA")); } }));
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
 		await expect(new HuckleberryClient("e", "p").login()).rejects.toMatchObject({ stage: "huckleberry-login", reason: "response-read-failed" });
+	});
+});
+
+describe("deployed notification test", () => {
+	const notificationRequest = (method = "POST", authorization = `Bearer ${token}`) => new Request("https://worker.example/notify-test", { method, headers: { Authorization: authorization } });
+	it("uses production notification bindings without syncing or accepting user-supplied message contents", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(Response.json({ event: "message", topic: env.NTFY_TOPIC, id: "test-id" }));
+		vi.stubGlobal("fetch", fetchMock);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		try {
+			const response = await run(notificationRequest());
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ accepted: true, status: 200, message: "ntfy accepted the test notification; phone delivery is not confirmed" });
+			expect(response.headers.get("Cache-Control")).toBe("no-store");
+			expect(response.headers.get("X-Sync-Build")).toBe("notification-diagnostics-v1");
+			expect(syncDate).not.toHaveBeenCalled();
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ topic: env.NTFY_TOPIC, title: "Daycare notification delivery test" });
+		} finally { log.mockRestore(); }
+	});
+	it("requires opt-in, authentication and POST before publishing", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		expect((await run(notificationRequest(), { ...env, MANUAL_SYNC_ENABLED: undefined })).status).toBe(404);
+		expect((await run(notificationRequest("POST", "Bearer wrong"))).status).toBe(401);
+		expect((await run(notificationRequest("GET"))).status).toBe(405);
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(syncDate).not.toHaveBeenCalled();
+	});
+	it("reports a safe publishing status without exposing upstream bodies or topics", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("SECRET TOPIC AND BODY", { status: 429 })));
+		const log = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const response = await run(notificationRequest());
+			expect(response.status).toBe(502);
+			expect(await response.text()).toBe("Sync failed: ntfy-publish (upstream HTTP 429)");
+			expect(JSON.stringify(log.mock.calls)).not.toContain("SECRET");
+		} finally { log.mockRestore(); }
+	});
+	it("does not mistake an off-hour successful cron invocation for a sync or notification", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await worker.scheduled({ scheduledTime: Date.parse("2026-06-12T22:00:00Z"), cron: "0 22 * * 1-5" } as ScheduledController, env, {} as ExecutionContext);
+			expect(syncDate).not.toHaveBeenCalled();
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(log).not.toHaveBeenCalledWith("Notification accepted by ntfy", expect.anything());
+		} finally { log.mockRestore(); }
 	});
 });

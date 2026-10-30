@@ -32,11 +32,23 @@ export default {
 
 	/** Manual runs are opt-in; GET previews, POST with write=1 writes. */
 	async fetch(request, env): Promise<Response> {
-		const headers = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Sync-Build": "login-diagnostics-v3" };
+		const headers = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Sync-Build": "notification-diagnostics-v1" };
 		const reply = (body: string, status: number) => new Response(body, { status, headers });
 		const url = new URL(request.url);
-		if (env.MANUAL_SYNC_ENABLED !== "true" || url.pathname !== "/sync") return reply("Not found", 404);
+		if (env.MANUAL_SYNC_ENABLED !== "true" || (url.pathname !== "/sync" && url.pathname !== "/notify-test")) return reply("Not found", 404);
 		if (!(await authorized(request, env.SYNC_TOKEN))) return reply("Unauthorized", 401);
+		if (url.pathname === "/notify-test") {
+			if (request.method !== "POST") return new Response("Notification tests require POST", { status: 405, headers: { ...headers, Allow: "POST" } });
+			try {
+				const receipt = await notify(env, "Daycare notification delivery test", "A notification test from the deployed Worker. No daycare data is included.");
+				console.log("Notification test accepted by ntfy", { status: receipt.status });
+				return Response.json({ ...receipt, message: "ntfy accepted the test notification; phone delivery is not confirmed" }, { headers });
+			} catch (error) {
+				const diagnostic = safeDiagnostic(error);
+				console.error("Notification test failed", diagnostic);
+				return reply(diagnostic, 502);
+			}
+		}
 		if (request.method !== "GET" && request.method !== "POST") {
 			return new Response("Method not allowed", { status: 405, headers: { ...headers, Allow: "GET, POST" } });
 		}
